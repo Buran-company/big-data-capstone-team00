@@ -1,123 +1,111 @@
-# Capstone proposal content
+# Design Drivers
 
-## Topic and title
+### Volumes & Peak Rates:
 
-Project Title: "Game Data Collector"
+Processing up to 5,000 events per second during peak hours (about 50 GB of raw data per day) with the ability to scale horizontally when launching gaming events
 
-Description: Big data architecture for collecting, processing and analyzing payment transactions and game events of a free to play (F2P) mobile game in order to optimize monetization and to monitor stability
+### Latency Classes:
 
-## Problem Statement
+The requirements for data freshness are divided into two classes: operational dashboards for stability monitoring (up to 5 minutes) and batch financial/product reports (daily)
 
-The current situation: The studio is launching a mobile project on Android, but data on user purchases is delayed.
+### Reliability & Compliance:
 
-Affected stakeholders: Game designers, backend developers, marketers, finance department, and technical support.
+Guarantee the accuracy of financial calculations, the protection of personal data (PII) of players and full compliance with privacy standards (GDPR)
 
-Decision to improve: Implementation of a single data pipeline, as well as automation of daily financial reporting.
+### Budget & Constraints:
 
-Measurable outcome: A 15% reduction in the outflow of players at early levels.
+Cost optimization by using cloud-based object storage instead of permanent relational database clusters for raw layers
 
-Guardrail (Risk measure): Strict compliance with privacy standards (GDPR), preventing leaks of sensitive player information.
+# Ingestion
 
-## Scope
+### Requirement:
 
-Population: All active mobile game players worldwide.
+Reliable collection of a continuous stream of game events without data loss and flexible reception of batch webhooks from app stores
 
-Geography: Global market (CIS, EU, LATAM).
+### Decision:
 
-Time horizon: 1 year historical data + continuous stream of real-time data.
+The hybrid scheme of ingestion. Game events are sent via the API Gateway to the Apache Kafka message broker, which provides buffering and sharding by player_id. Payment webhooks and backups are received through a dedicated listener service
 
-Unit of analysis: One game event or one purchase transaction.
+### Trade-off:
 
-Inclusions: Payment webhooks of app stores.
+The increased operational complexity of Kafka cluster administration is offset by fault tolerance and storage protection from load surges
 
-Exclusions: Data from third-party advertising networks (stored in external partner accounts).
+### Rejected Alternative:
 
-Expected users: Live-ops managers, data analysts, finance department.
+Direct recording of client events from games to a relational database was rejected due to the risk of database crashes during peak loads and the high cost of locks
 
-## Dataset(s)
+# Object Storage
 
-### Game Events
+### Requirement:
 
-Source: Client logs in JSON format 
+Cheap, long-lasting storage of large amounts of data with support for separation into logical zones (medallion architecture) and the ability to isolate personal information
 
-Access method: API gateway
+### Decision:
 
-Grain: One player action (click, death, level completion)
+Using AWS S3 divided into zones: Bronze (raw JSON logs), Silver (cleaned, deduplicated data with masked PII) and Gold (final analytical aggregates)
 
-Important fields: timestamp and player_id
+### Trade-off:
 
-Format: JSON that parses into TIMESTAMPZ, BIGINT
+Lack of native transactional isolation "out of the box" (solved by using tabular formats like Delta Lake / Iceberg in the following stages)
 
-Scale estimate: Real-time stream (up to 5,000 events/seconds during peak hours)
+# Storage and Compute Separation
 
-### In-App Purchases
+### Requirement:
 
-Source: Webhooks from Google Play and the App Store in JSON format
+The ability to independently scale storage capacity and computing power depending on current loads
 
-Access method: API gateway
+### Decision:
 
-Grain: One successful or cancelled purchase transaction
+Complete separation of permanent storage in S3 from computing clusters (Stream Processing Engine and Batch Processing Engine). Calculations can be run, scaled to zero, or expanded on demand
 
-Important fields: purchase_id, status
+### Trade-off:
 
-Format: UUID, TEXT ENUM
+Increased network traffic (I/O) between storage and computing nodes when performing heavy joins
 
-Scale estimate: Batch upload every hour as purchases are made.
+# Scale-Out Choices
 
-### User Profiles
+### Requirement:
 
-Source: PostgreSQL relational database
+The ability of the platform to cope with peaks of activity (for example, update releases) without degradation of response time
 
-Access: SQL methods in backend
+### Decision:
 
-Grain: One row per registered user
+Horizontal scaling of Kafka (partitioning by the player_id key), scaling of Apache Flink/Spark workers, as well as the use of a distributed MPP engine (ClickHouse) for analytical queries
 
-Important fields: user_id
+### Trade-off:
 
-Format: BIGINT
+The risk of "hot keys" for popular players or top event items, requiring a competent selection of partitioning keys
 
-Scale estimate: Daily Incremental Backup
+# Processing and Serving
 
-### ---
+### Requirement:
 
-License/Permission: the data is modeled, license is educational, there are no restrictions on use.
+Fast delivery of ready-made data storefronts to consumers without overloading the raw layers
 
-Sensitivity/Privacy: IP addresses of the players, email addresses (when linking the account), payment tokens of the device. They require masking and pseudonymization at the stage of getting into the repository.
+### Decision:
 
-Known limitations: Peak loads during major game updates or esports events
+Streaming processing (Flink) for live data and batch processing (Spark) for daily storefronts. Data from the Gold zone is provided through a distributed SQL engine (ClickHouse) and a caching semantic layer for dashboards
 
-## Analytical questions
+# Governance, Privacy, and Access Control
 
-### Operational question (Freshness: 5 minutes): 
+### Requirement:
 
-What are the current indicators of customer crashes and network delays by region over the past 15 minutes?
+Protection of confidential player data (IP addresses, mail, payment tokens) and compliance with the principle of least privilege
 
-### Financial question (Freshness: once a day): 
+### Decision:
 
-What is the total gross revenue and average receipt for the segments of paying players over the past day?
+Early masking and pseudonymization of PII data during the transition from the Bronze to Silver zone. Implementing a role-based access model (RBAC) and maintaining a Lineage-based metadata catalog
 
-### Product question (Historical analysis): 
+### Trade-off:
 
-At what specific campaign level is the largest churn rate among players from the EU region over the last quarter?
+Restricting analysts' direct access to raw data (Bronze), requiring prior clearance and masking procedures
 
-## Preliminary Architecture
+# Operations and Cost
 
---- Using Storage and Compute Separation based on cloud object storage (AWS S3) 
---- Organization of data zones according to the medallion architecture (Bronze -> Silver -> Gold)
---- A message broker (Kafka)
---- Streaming engine (Apache Flink/Spark Streaming) to process the telemetry stream
---- Distributed SQL engine for analytical queries
+### Requirement:
 
-# Dataset evidence and safety
+Reliable pipeline automation, fault monitoring, and cloud cost control
 
-### Proof of feasibility: 
+### Decision:
 
-The repository uses a mini-sample data structure (JSON schemas and non-sensitive logs) to demonstrate the functionality of the scripts.
-
-### Load assessment: 
-
-The production load is estimated at 50 GB of raw logs per day (the training sample has been reduced to megabytes for repository security).
-
-### Security: 
-
-According to the security rules, to the repository are NOT uploaded: real personal user data, cloud access tokens, database connection strings, API keys. All secrets are stored in environment variables (.env.example), and in .gitignore added rules for blocking temporary files.
+Orchestration of all tasks using Apache Airflow with configured Data Quality Gates, automatic crash retries, and alerts for the maintenance team
