@@ -1,3 +1,12 @@
+# Game Data Collector
+
+> **Navigation / Repository Structure:**
+> * 📊 [Architecture Diagram & Assets](./architecture/)
+> * 📄 [Architecture Rationale](./docs/architecture-rationale.md)
+> * 🗂️ [Data-Source Register](./docs/data-source-register.md)
+> * 🔒 [Governance, Privacy & Access Matrix](./docs/governance-privacy-access.md)
+> * 📈 [Analytical Questions](./analysis/analytical-questions.md)
+
 # Capstone proposal content
 
 ## Topic and title
